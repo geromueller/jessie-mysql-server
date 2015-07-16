@@ -1,0 +1,67 @@
+- name: ensure python-mysql is installed
+  apt: pkg=python-mysqldb state=installed
+
+- name: ensure mysql is installed
+  apt: pkg=mysql-server state=installed
+  register: mysql_server_installed
+
+- name: ensure mysql is running and starts on boot
+  service: name=mysql state=started enabled=true
+
+# -------------------------------------------------------------------
+# Initial Database setup
+# -------------------------------------------------------------------
+- name: initial setup - set default password
+  when: (not jessie_mysql_server_root_password is defined) and (mysql_server_installed|changed)
+  set_fact:
+    jessie_mysql_server_root_password: changeme
+
+# 'localhost' needs to be the last item for idempotency, see
+# http://ansible.cc/docs/modules.html#mysql-user
+- name: initial setup - set mysql root password for all root accounts
+  when: mysql_server_installed|changed
+  mysql_user: name=root login_user=root login_password="" host={{ item }} password={{jessie_mysql_server_root_password}}
+  with_items:
+    - "{{ ansible_hostname }}"
+    - 127.0.0.1
+    - ::1
+    - localhost
+
+- name: initial setup - copy .my.cnf file with root password credentials
+  when: mysql_server_installed|changed
+  template: src=my.cnf dest=/root/.my.cnf owner=root mode=0600
+
+# -------------------------------------------------------------------
+# Database setup
+# -------------------------------------------------------------------
+
+# 'localhost' needs to be the last item for idempotency, see
+# http://ansible.cc/docs/modules.html#mysql-user
+- name: update mysql root password for all root accounts
+  when: jessie_mysql_server_root_password is defined and jessie_mysql_server_root_password|length > 0 and not mysql_server_installed|changed
+  mysql_user: name=root host={{ item }} password={{jessie_mysql_server_root_password}}
+  with_items:
+    - "{{ ansible_hostname }}"
+    - 127.0.0.1
+    - ::1
+    - localhost
+
+- name: copy .my.cnf file with root password credentials
+  when: jessie_mysql_server_root_password is defined and jessie_mysql_server_root_password|length > 0 and not mysql_server_installed|changed
+  template: src=my.cnf dest=/root/.my.cnf owner=root mode=0600
+
+# -------------------------------------------------------------------
+# Security setup
+# -------------------------------------------------------------------
+
+- name: security setup - ensure anonymous users are not in the database
+  mysql_user: name='' host={{ item }} state=absent
+  with_items:
+    - "{{ ansible_hostname }}"
+    - 127.0.0.1
+    - ::1
+    - localhost
+    - "{{ inventory_hostname }}"
+
+- name: security setup - remove the test database
+  mysql_db: name=test state=absent
